@@ -85,10 +85,17 @@ class CameraHandler:
             raise RuntimeError(
                 "Failed to open camera. Please check:\n"
                 "1. Camera is connected properly\n"
-                "2. Camera is enabled: sudo raspi-config -> Interface Options -> Camera\n"
-                "3. Required packages installed: sudo apt-get install python3-picamera2 python3-opencv\n"
+                "2. Camera is enabled in raspi-config:\n"
+                "   - Pi 4/5: Interface Options -> Camera\n"
+                "   - Pi 3/older: Interface Options -> Legacy Camera\n"
+                "3. Required packages installed:\n"
+                "   - Pi 4/5: sudo apt-get install python3-picamera2\n"
+                "   - Pi 3/older: sudo apt-get install python3-opencv\n"
                 "4. User has video group access: sudo usermod -aG video $USER\n"
-                "5. Test with: libcamera-hello --list-cameras"
+                "5. Test camera:\n"
+                "   - Pi 4/5: libcamera-hello --list-cameras\n"
+                "   - Pi 3/older: raspistill -o test.jpg\n"
+                "6. Reboot after making changes: sudo reboot"
             )
                 
         except Exception as e:

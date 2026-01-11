@@ -6,10 +6,43 @@ Run this to test if your camera is working properly.
 
 import sys
 import time
+import subprocess
+import os
 
 print("=" * 60)
 print("Raspberry Pi Camera Diagnostic")
 print("=" * 60)
+
+# Test 0: Check Raspberry Pi version and camera stack
+print("\n[0] Detecting Raspberry Pi model...")
+try:
+    with open('/proc/device-tree/model', 'r') as f:
+        model = f.read().strip()
+    print(f"Model: {model}")
+    
+    # Check if running on Pi 3 or older
+    is_pi3_or_older = 'Pi 3' in model or 'Pi 2' in model or 'Pi 1' in model or 'Zero' in model
+    
+    if is_pi3_or_older:
+        print("\n⚠️  Older Raspberry Pi detected (Pi 3 or earlier)")
+        print("   Recommendation: Use legacy camera (raspistill) or OpenCV")
+        print("\n   Testing legacy camera with raspistill...")
+        try:
+            result = subprocess.run(['raspistill', '-o', '/dev/null', '-t', '1000'], 
+                                  capture_output=True, timeout=5)
+            if result.returncode == 0:
+                print("   ✓ Legacy camera works! Use OpenCV method.")
+            else:
+                print(f"   ✗ raspistill failed: {result.stderr.decode()}")
+        except FileNotFoundError:
+            print("   ℹ️  raspistill not found. Will try OpenCV...")
+        except Exception as e:
+            print(f"   ℹ️  Cannot test raspistill: {e}")
+    else:
+        print("✓ Modern Raspberry Pi detected (Pi 4 or newer)")
+        
+except Exception as e:
+    print(f"Could not detect Pi model: {e}")
 
 # Test 1: Check picamera2
 print("\n[1] Testing picamera2...")
@@ -80,13 +113,15 @@ except Exception as e:
 print("\n" + "=" * 60)
 print("❌ FAILED: Camera not working with any method")
 print("=" * 60)
-print("\nTroubleshooting steps:")
-print("1. Enable camera: sudo raspi-config -> Interface Options -> Camera")
+print("\nTroubleshooting steps for Raspberry Pi 3:")
+print("1. Enable camera: sudo raspi-config -> Interface Options -> Legacy Camera -> Enable")
 print("2. Check camera connection and cable")
-print("3. Test with system command: libcamera-hello --list-cameras")
-print("4. Add user to video group: sudo usermod -aG video $USER")
-print("5. Install dependencies:")
-print("   sudo apt-get install python3-picamera2 python3-opencv")
+print("3. Test with legacy command: raspistill -o test.jpg")
+print("4. Install OpenCV: pip install opencv-python")
+print("5. Add user to video group: sudo usermod -aG video $USER")
 print("6. Reboot: sudo reboot")
 print("7. Check camera is not in use: lsof | grep video")
-print("\nFor more help, run: libcamera-hello -t 5000")
+print("\nFor Raspberry Pi 3, OpenCV method is recommended.")
+print("libcamera is not available on Pi 3 - use legacy camera stack.")
+print("\nNote: If using Raspberry Pi camera module v1 or v2,")
+print("      ensure you've enabled 'Legacy Camera' in raspi-config")
