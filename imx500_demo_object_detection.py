@@ -32,6 +32,14 @@ announcement_cooldown = 3.0  # Seconds between announcements for same object
 audio_queue = []
 audio_lock = threading.Lock()
 
+# Define human and animal categories (COCO dataset labels)
+HUMANS = {'person', 'human'}
+ANIMALS = {
+    'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 
+    'zebra', 'giraffe', 'mouse', 'rabbit', 'fox', 'raccoon', 'deer',
+    'skunk', 'squirrel', 'lion', 'tiger', 'monkey', 'gorilla', 'wolf'
+}
+
 
 class Detection:
     def __init__(self, coords, category, conf, metadata):
@@ -88,8 +96,14 @@ def audio_worker():
             time.sleep(0.1)
 
 
+def is_human_or_animal(label):
+    """Check if the detected object is a human or animal."""
+    label_lower = label.lower()
+    return label_lower in HUMANS or label_lower in ANIMALS
+
+
 def announce_detections(detections):
-    """Announce detected objects with cooldown to avoid spam."""
+    """Announce detected objects (humans and animals only) with cooldown to avoid spam."""
     global last_announced
     
     if not detections or args.no_audio:
@@ -99,10 +113,11 @@ def announce_detections(detections):
     labels = get_labels()
     detected_objects = defaultdict(int)
     
-    # Count each object type
+    # Count each object type (only humans and animals)
     for detection in detections:
         label = labels[int(detection.category)]
-        detected_objects[label] += 1
+        if is_human_or_animal(label):
+            detected_objects[label] += 1
     
     # Build announcement
     announcements = []
@@ -122,6 +137,8 @@ def announce_detections(detections):
             # Limit queue size
             if len(audio_queue) < 3:
                 audio_queue.append(announcement_text)
+        # Also print to console
+        print(f"[ALERT] {announcement_text}")
 
 
 def parse_detections(metadata: dict):
@@ -159,7 +176,7 @@ def parse_detections(metadata: dict):
         if score > threshold
     ]
     
-    # Announce detections
+    # Announce detections (only humans and animals)
     announce_detections(last_detections)
     
     return last_detections
@@ -183,10 +200,16 @@ def draw_detections(request, stream="main"):
     with MappedArray(request, stream) as m:
         for detection in detections:
             x, y, w, h = detection.box
-            label = f"{labels[int(detection.category)]} ({detection.conf:.2f})"
+            label = labels[int(detection.category)]
+            label_text = f"{label} ({detection.conf:.2f})"
+            
+            # Highlight humans and animals with different color
+            is_target = is_human_or_animal(label)
+            box_color = (0, 0, 255) if is_target else (0, 255, 0)  # Red for humans/animals, green for others
+            text_color = (0, 0, 255) if is_target else (0, 0, 255)  # Red text for all
 
             # Calculate text size and position
-            (text_width, text_height), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            (text_width, text_height), baseline = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
             text_x = x + 5
             text_y = y + 15
 
@@ -204,11 +227,11 @@ def draw_detections(request, stream="main"):
             cv2.addWeighted(overlay, alpha, m.array, 1 - alpha, 0, m.array)
 
             # Draw text on top of the background
-            cv2.putText(m.array, label, (text_x, text_y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+            cv2.putText(m.array, label_text, (text_x, text_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1)
 
             # Draw detection box
-            cv2.rectangle(m.array, (x, y), (x + w, y + h), (0, 255, 0, 0), thickness=2)
+            cv2.rectangle(m.array, (x, y), (x + w, y + h), box_color, thickness=2)
 
         if intrinsics.preserve_aspect_ratio:
             b_x, b_y, b_w, b_h = imx500.get_roi_scaled(request)
@@ -252,6 +275,10 @@ if __name__ == "__main__":
     print(f"Audio method: {AUDIO_METHOD}")
     if AUDIO_METHOD == "espeak":
         print("Note: Install pyttsx3 or gtts for better audio quality")
+    print("\n🎯 Detection Mode: HUMANS AND ANIMALS ONLY")
+    print(f"Humans: {', '.join(sorted(HUMANS))}")
+    print(f"Animals: {', '.join(sorted(ANIMALS))}")
+    print("\n")
     
     # Start audio worker thread
     if not args.no_audio:
@@ -298,7 +325,7 @@ if __name__ == "__main__":
     last_results = None
     picam2.pre_callback = draw_detections
     
-    print("Starting detection with audio announcements...")
+    print("🔊 Starting detection with audio for HUMANS and ANIMALS only...")
     print("Press Ctrl+C to exit")
     
     try:
