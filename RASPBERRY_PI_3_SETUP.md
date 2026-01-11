@@ -6,12 +6,48 @@ Raspberry Pi 3 does **not** support libcamera. You need to use the legacy camera
 
 ## Setup Steps for Raspberry Pi 3
 
-### 1. Enable Legacy Camera
+### 1. Enable Camera
+
+#### Method A: Using raspi-config
 ```bash
 sudo raspi-config
 ```
-- Go to: **Interface Options** → **Legacy Camera** → **Enable**
-- Reboot: `sudo reboot`
+Look for one of these options (varies by OS version):
+- **Interface Options** → **Camera** → Enable
+- **Interface Options** → **Legacy Camera** → Enable  
+- **Interfacing Options** → **Camera** → Enable
+
+Then reboot: `sudo reboot`
+
+#### Method B: Edit config.txt directly (if no camera option in raspi-config)
+```bash
+# Edit the boot config
+sudo nano /boot/config.txt
+
+# Add this line (or make sure it's not commented out):
+start_x=1
+gpu_mem=128
+
+# If the line exists with a # in front, remove the #
+# Save with Ctrl+X, then Y, then Enter
+
+# Reboot
+sudo reboot
+```
+
+#### Method C: Edit firmware config (newer OS)
+```bash
+# For newer Raspberry Pi OS
+sudo nano /boot/firmware/config.txt
+
+# Add these lines:
+start_x=1
+gpu_mem=128
+camera_auto_detect=1
+
+# Save and reboot
+sudo reboot
+```
 
 ### 2. Install Required Packages
 ```bash
