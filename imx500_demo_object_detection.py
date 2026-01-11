@@ -13,6 +13,14 @@ from picamera2.devices import IMX500
 from picamera2.devices.imx500 import (NetworkIntrinsics,
                                       postprocess_nanodet_detection)
 
+# GPIO for ultrasonic sensor
+try:
+    import RPi.GPIO as GPIO
+    GPIO_AVAILABLE = True
+except ImportError:
+    GPIO_AVAILABLE = False
+    print("Warning: RPi.GPIO not available. Running without ultrasonic sensor.")
+
 # Try different audio methods
 try:
     import pyttsx3
@@ -32,6 +40,11 @@ announcement_cooldown = 3.0  # Seconds between announcements for same object
 audio_queue = []
 audio_lock = threading.Lock()
 
+# Ultrasonic sensor state
+sensor_active = False
+sensor_lock = threading.Lock()
+camera_active = False
+
 # Define human and animal categories (COCO dataset labels)
 HUMANS = {'person', 'human'}
 ANIMALS = {
@@ -47,6 +60,84 @@ class Detection:
         self.category = category
         self.conf = conf
         self.box = imx500.convert_inference_coords(coords, metadata, picam2)
+
+
+def setup_ultrasonic_sensor(trig_pin, echo_pin):
+    """Setup GPIO pins for ultrasonic sensor."""
+    if not GPIO_AVAILABLE:
+        return False
+    
+    try:
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(trig_pin, GPIO.OUT)
+        GPIO.setup(echo_pin, GPIO.IN)
+        GPIO.output(trig_pin, False)
+        time.sleep(0.1)  # Allow sensor to settle
+        print(f"✓ Ultrasonic sensor initialized on GPIO {trig_pin} (TRIG) and {echo_pin} (ECHO)")
+        return True
+    except Exception as e:
+        print(f"✗ Failed to setup ultrasonic sensor: {e}")
+        return False
+
+
+def measure_distance(trig_pin, echo_pin):
+    """Measure distance using ultrasonic sensor. Returns distance in meters."""
+    if not GPIO_AVAILABLE:
+        return 0.5  # Default to active for testing without sensor
+    
+    try:
+        # Send trigger pulse
+        GPIO.output(trig_pin, True)
+        time.sleep(0.00001)  # 10 microseconds
+        GPIO.output(trig_pin, False)
+        
+        # Wait for echo
+        timeout = time.time() + 0.1  # 100ms timeout
+        pulse_start = time.time()
+        while GPIO.input(echo_pin) == 0 and time.time() < timeout:
+            pulse_start = time.time()
+        
+        pulse_end = time.time()
+        while GPIO.input(echo_pin) == 1 and time.time() < timeout:
+            pulse_end = time.time()
+        
+        # Calculate distance
+        pulse_duration = pulse_end - pulse_start
+        distance = pulse_duration * 17150  # Speed of sound / 2 in cm
+        distance_meters = distance / 100
+        
+        # Filter out invalid readings
+        if distance_meters > 4 or distance_meters < 0.02:
+            return None
+        
+        return distance_meters
+    except Exception as e:
+        print(f"Sensor read error: {e}")
+        return None
+
+
+def ultrasonic_monitor(trig_pin, echo_pin, threshold_distance=1.0):
+    """Background thread to monitor ultrasonic sensor."""
+    global sensor_active, camera_active
+    
+    print(f"🔍 Ultrasonic monitoring started (threshold: {threshold_distance}m)")
+    
+    while True:
+        distance = measure_distance(trig_pin, echo_pin)
+        
+        if distance is not None:
+            with sensor_lock:
+                was_active = sensor_active
+                sensor_active = distance <= threshold_distance
+                
+                if sensor_active and not was_active:
+                    print(f"⚡ Motion detected at {distance:.2f}m - Activating camera!")
+                    camera_active = True
+                elif not sensor_active and was_active:
+                    print(f"💤 No motion ({distance:.2f}m) - Camera standby")
+                    camera_active = False
+        
+        time.sleep(0.1)  # Check every 100ms
 
 
 def speak_text(text):
@@ -106,6 +197,11 @@ def announce_detections(detections):
     """Announce detected objects (humans and animals only) with cooldown to avoid spam."""
     global last_announced
     
+    # Only announce if sensor is active
+    with sensor_lock:
+        if not camera_active:
+            return
+    
     if not detections or args.no_audio:
         return
     
@@ -138,12 +234,18 @@ def announce_detections(detections):
             if len(audio_queue) < 3:
                 audio_queue.append(announcement_text)
         # Also print to console
-        print(f"[ALERT] {announcement_text}")
+        print(f"🚨 [ALERT] {announcement_text}")
 
 
 def parse_detections(metadata: dict):
     """Parse the output tensor into a number of detected objects, scaled to the ISP output."""
     global last_detections
+    
+    # Only process if camera is active
+    with sensor_lock:
+        if not camera_active and args.ultrasonic_enable:
+            return []
+    
     bbox_normalization = intrinsics.bbox_normalization
     bbox_order = intrinsics.bbox_order
     threshold = args.threshold
@@ -194,10 +296,20 @@ def get_labels():
 def draw_detections(request, stream="main"):
     """Draw the detections for this request onto the ISP output."""
     detections = last_results
-    if detections is None:
-        return
+    
     labels = get_labels()
     with MappedArray(request, stream) as m:
+        # Show sensor status on screen
+        if args.ultrasonic_enable:
+            with sensor_lock:
+                status_text = "ACTIVE" if camera_active else "STANDBY"
+                status_color = (0, 255, 0) if camera_active else (128, 128, 128)
+            cv2.putText(m.array, f"Sensor: {status_text}", (10, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+        
+        if detections is None or not detections:
+            return
+            
         for detection in detections:
             x, y, w, h = detection.box
             label = labels[int(detection.category)]
@@ -265,6 +377,15 @@ def get_args():
                         help="Disable audio announcements")
     parser.add_argument("--audio-cooldown", type=float, default=3.0,
                         help="Seconds between announcements for same object (default: 3.0)")
+    # Ultrasonic sensor options
+    parser.add_argument("--ultrasonic-enable", action="store_true",
+                        help="Enable ultrasonic sensor trigger")
+    parser.add_argument("--trig-pin", type=int, default=23,
+                        help="GPIO pin for ultrasonic TRIG (default: 23)")
+    parser.add_argument("--echo-pin", type=int, default=24,
+                        help="GPIO pin for ultrasonic ECHO (default: 24)")
+    parser.add_argument("--distance-threshold", type=float, default=1.0,
+                        help="Distance threshold in meters (default: 1.0)")
     return parser.parse_args()
 
 
@@ -278,6 +399,30 @@ if __name__ == "__main__":
     print("\n🎯 Detection Mode: HUMANS AND ANIMALS ONLY")
     print(f"Humans: {', '.join(sorted(HUMANS))}")
     print(f"Animals: {', '.join(sorted(ANIMALS))}")
+    
+    # Setup ultrasonic sensor
+    if args.ultrasonic_enable:
+        print(f"\n📡 Ultrasonic Sensor Configuration:")
+        print(f"   TRIG Pin: GPIO {args.trig_pin}")
+        print(f"   ECHO Pin: GPIO {args.echo_pin}")
+        print(f"   Distance Threshold: {args.distance_threshold}m")
+        
+        if setup_ultrasonic_sensor(args.trig_pin, args.echo_pin):
+            # Start ultrasonic monitoring thread
+            sensor_thread = threading.Thread(
+                target=ultrasonic_monitor, 
+                args=(args.trig_pin, args.echo_pin, args.distance_threshold),
+                daemon=True
+            )
+            sensor_thread.start()
+        else:
+            print("⚠️  Running without ultrasonic sensor")
+            args.ultrasonic_enable = False
+            camera_active = True
+    else:
+        print("\n⚠️  Ultrasonic sensor disabled - camera always active")
+        camera_active = True
+    
     print("\n")
     
     # Start audio worker thread
@@ -325,12 +470,18 @@ if __name__ == "__main__":
     last_results = None
     picam2.pre_callback = draw_detections
     
-    print("🔊 Starting detection with audio for HUMANS and ANIMALS only...")
-    print("Press Ctrl+C to exit")
+    if args.ultrasonic_enable:
+        print("🔊 Starting detection with ULTRASONIC TRIGGER for HUMANS and ANIMALS...")
+        print("   Camera activates when object within {}m".format(args.distance_threshold))
+    else:
+        print("🔊 Starting detection with audio for HUMANS and ANIMALS...")
+    print("Press Ctrl+C to exit\n")
     
     try:
         while True:
             last_results = parse_detections(picam2.capture_metadata())
     except KeyboardInterrupt:
-        print("\nStopping...")
+        print("\n\nStopping...")
+        if args.ultrasonic_enable and GPIO_AVAILABLE:
+            GPIO.cleanup()
         picam2.stop()
