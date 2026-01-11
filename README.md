@@ -80,13 +80,39 @@ Edit `config/settings.json` to customize detection settings:
 
 ## Usage
 
-Run the main detection application:
+There are three ways to run the detection application:
 
+### Option 1: Using run.py (Recommended)
 ```bash
-python src/pi_detector/main.py
+python run.py
+
+# Or with custom config:
+python run.py --config config/settings.json
 ```
 
-Or use the example script:
+### Option 2: Install and use entry point
+```bash
+# Install the package first
+pip install -e .
+
+# Then run using the command
+pi-detector
+
+# Or with custom config:
+pi-detector --config config/settings.json
+```
+
+### Option 3: Run as a module
+```bash
+# From project root directory
+python -m pi_detector.main
+
+# Or with custom config:
+python -m pi_detector.main --config config/settings.json
+```
+
+### Example Script
+You can also use the example script:
 
 ```bash
 python examples/basic_detection.py

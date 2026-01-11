@@ -41,29 +41,55 @@ class CameraHandler:
         try:
             if self.use_picamera:
                 logger.info("Initializing Picamera2...")
-                self.camera = Picamera2()
+                try:
+                    self.camera = Picamera2()
+                    
+                    # Configure camera
+                    config = self.camera.create_preview_configuration(
+                        main={"size": self.resolution, "format": "RGB888"}
+                    )
+                    self.camera.configure(config)
+                    self.camera.start()
+                    
+                    logger.info("Picamera2 initialized successfully")
+                    return
+                except Exception as pic_error:
+                    logger.warning(f"Picamera2 failed: {pic_error}. Trying OpenCV fallback...")
+                    self.use_picamera = False
+            
+            # Try OpenCV (either as primary or fallback)
+            logger.info("Initializing OpenCV camera...")
+            
+            # Try different camera indices
+            for camera_idx in [0, 1, -1]:
+                logger.info(f"Trying camera index {camera_idx}...")
+                self.camera = cv2.VideoCapture(camera_idx)
                 
-                # Configure camera
-                config = self.camera.create_preview_configuration(
-                    main={"size": self.resolution, "format": "RGB888"}
-                )
-                self.camera.configure(config)
-                self.camera.start()
-                
-                logger.info("Picamera2 initialized successfully")
-            else:
-                logger.info("Initializing OpenCV camera...")
-                self.camera = cv2.VideoCapture(0)
-                
-                if not self.camera.isOpened():
-                    raise RuntimeError("Failed to open camera")
-                
-                # Set camera properties
-                self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
-                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
-                self.camera.set(cv2.CAP_PROP_FPS, self.framerate)
-                
-                logger.info("OpenCV camera initialized successfully")
+                if self.camera.isOpened():
+                    # Set camera properties
+                    self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
+                    self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+                    self.camera.set(cv2.CAP_PROP_FPS, self.framerate)
+                    
+                    # Test if we can actually read a frame
+                    ret, test_frame = self.camera.read()
+                    if ret:
+                        logger.info(f"OpenCV camera initialized successfully on index {camera_idx}")
+                        return
+                    else:
+                        self.camera.release()
+                        logger.warning(f"Camera {camera_idx} opened but cannot read frames")
+                else:
+                    logger.warning(f"Camera {camera_idx} could not be opened")
+            
+            raise RuntimeError(
+                "Failed to open camera. Please check:\n"
+                "1. Camera is connected properly\n"
+                "2. Camera is enabled: sudo raspi-config -> Interface Options -> Camera\n"
+                "3. Required packages installed: sudo apt-get install python3-picamera2 python3-opencv\n"
+                "4. User has video group access: sudo usermod -aG video $USER\n"
+                "5. Test with: libcamera-hello --list-cameras"
+            )
                 
         except Exception as e:
             logger.error(f"Failed to initialize camera: {e}")
